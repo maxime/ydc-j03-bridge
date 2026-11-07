@@ -121,6 +121,8 @@ struct PanelStatus {
   std::optional<bool> power;
   uint32_t observedAt = 0;
   int humidity = -1;
+  int humidityTarget = -1;
+  int timerHours = -1;
 };
 
 static_assert(std::is_trivially_copyable_v<PanelStatus>);
@@ -133,6 +135,7 @@ bool settingTarget = false;
 constexpr uint32_t kAdjustmentMs = 10000;
 constexpr uint32_t kPanelFreshMs = 10000;
 constexpr uint32_t kPowerSettleMs = 2000;
+constexpr int kMaxTimerHours = 8;
 
 constexpr int displayHumidity(std::string_view text) {
   if (text.empty() || text.size() > 2) {
@@ -184,6 +187,9 @@ void updatePanelStatus() {
     panelStatus.power = power;
     panelStatus.observedAt = now;
     panelStatus.humidity = displayHumidity(panelText);
+    if (power == false) {
+      panelStatus.timerHours = 0;
+    }
   }
   publishPanelStatus();
 }
@@ -195,8 +201,15 @@ void pauseHumidity() {
 }
 
 void notePanelCommand(const char* name) {
-  if (strcmp(name, "humidity") == 0 || strcmp(name, "timer") == 0) {
+  if (strcmp(name, "humidity") == 0) {
+    panelStatus.humidityTarget = -1;
     pauseHumidity();
+  } else if (strcmp(name, "timer") == 0) {
+    panelStatus.timerHours = -1;
+    pauseHumidity();
+  } else if (strcmp(name, "sleep") == 0) {
+    panelStatus.humidityTarget = -1;
+    publishPanelStatus();
   } else if (strcmp(name, "on") == 0 || strcmp(name, "off") == 0) {
     powerPressedAt = millis();
   }
@@ -1117,11 +1130,19 @@ bool sendPanelPress(const DryerCommand& command) {
 }
 
 bool setDisplayTarget(bool (*setter)(int, int*), int target, int* shown = nullptr) {
+  const bool timer = setter == setTimerHours;
+  if (timer ? (target < 0 || target > kMaxTimerHours)
+            : (target < 40 || target > 70 || target % 5 != 0)) {
+    return false;
+  }
   settingTarget = true;
   pauseHumidity();
   const bool ok = setter(target, shown);
   adjustmentAt = millis();
   settingTarget = false;
+  int& confirmed = timer ? panelStatus.timerHours : panelStatus.humidityTarget;
+  confirmed = ok ? target : -1;
+  publishPanelStatus();
   return ok;
 }
 
@@ -1274,7 +1295,7 @@ const char kPage[] = R"html(
   <button onclick="setHumidity()">Set Humidity (%)</button>
 </div>
 <div style="margin-top: 0.6rem;">
-  <input id="hours" type="number" min="0" max="24" value="2" style="font-size: 1.2rem; width: 4rem; padding: 0.5rem;">
+  <input id="hours" type="number" min="0" max="8" value="2" style="font-size: 1.2rem; width: 4rem; padding: 0.5rem;">
   <button onclick="setTimer()">Set Timer (h)</button>
 </div>
 <p id="status"></p>
@@ -1556,6 +1577,16 @@ float humidity() {
     return NAN;
   }
   return status.humidity;
+}
+
+float humidity_target() {
+  const int target = readPanelStatus().humidityTarget;
+  return target < 0 ? NAN : static_cast<float>(target);
+}
+
+float timer_hours() {
+  const int hours = readPanelStatus().timerHours;
+  return hours < 0 ? NAN : static_cast<float>(hours);
 }
 
 }  // namespace yamazen

@@ -4,7 +4,7 @@ Control a Yamazen YDC-J03 dehumidifier over Wi-Fi from a browser or Home Assista
 
 ## Control the dryer
 
-The built-in web page shows the panel display and lets you control power, humidity, fan speed, sleep mode, and the timer. You can also set a humidity target from 40% to 70% in steps of 5% and a timer from 0 to 24 hours. The web On and Off buttons both send the same physical power toggle.
+The built-in web page shows the panel display and lets you control power, humidity, fan speed, sleep mode, and the timer. You can set a humidity target from 40% to 70% in steps of 5%. The YDC-J03 shuts off after 1 to 8 hours on its timer, and 0 clears it. The web On and Off buttons both send the same physical power toggle. [Yamazen manual](https://book.yamazen.co.jp/downloads/W7N4004PYDC-J03/)
 
 With the ESPHome build, open `http://yamazen-air-dryer.local/` or use the ESP32's IP address. These HTTP requests read the panel and step the fan speed from a script.
 
@@ -31,12 +31,12 @@ esphome run esphome/yamazen-air-dryer.yaml
 
 Add the discovered ESPHome device in Home Assistant and enter the same encryption key. If discovery is unavailable, add the ESPHome integration manually using the ESP32's IP address.
 
-Home Assistant gets a Power switch that reads the panel state before sending a toggle, a numeric Humidity sensor for history, and a Panel Display text sensor. The Humidity Step, Fan Step, Sleep Toggle, and Timer Step buttons match their physical counterparts. Humidity history pauses while the panel is off or showing nonnumeric text, and during timer or setpoint adjustments and for 10 seconds afterward.
+Home Assistant gets a Power switch, a Humidity sensor for history, and a Panel Display text sensor. Enter a Humidity Target or Shutoff Timer directly. Each field shows the last setting the bridge confirmed. The Fan Step and Sleep Toggle buttons match their physical counterparts. Humidity history pauses while the panel is off or showing nonnumeric text, and during timer or setpoint adjustments and for 10 seconds afterward.
 
 | Home Assistant action | Input |
 | --- | --- |
 | `esphome.yamazen_air_dryer_set_humidity` | `percent`, 40 to 70 in steps of 5 |
-| `esphome.yamazen_air_dryer_set_timer` | `hours`, 0 to 24 |
+| `esphome.yamazen_air_dryer_set_timer` | `hours`, 0 to 8 |
 
 After the first install, update over Wi-Fi with the dryer idle. You can use the same configuration in ESPHome Device Builder by placing the device YAML, both `dryer_bridge` source files, and `partitions.csv` in its configuration directory and adding the secret keys to its `secrets.yaml`. [ESPHome OTA documentation](https://esphome.io/components/ota/esphome/)
 

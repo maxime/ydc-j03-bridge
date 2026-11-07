@@ -87,11 +87,39 @@ switch:
     turn_off_action:
       - lambda: yamazen::set_power(false);
 
-button:
+number:
   - platform: template
-    name: Humidity Step
-    on_press:
-      - lambda: yamazen::press("humidity");
+    name: Humidity Target
+    device_class: humidity
+    unit_of_measurement: "%"
+    mode: box
+    min_value: 40
+    max_value: 70
+    step: 5
+    update_interval: 1s
+    lambda: return yamazen::humidity_target();
+    set_action:
+      - lambda: |-
+          if (x == static_cast<int>(x)) {
+            yamazen::set_humidity(static_cast<int>(x));
+          }
+  - platform: template
+    name: Shutoff Timer
+    device_class: duration
+    unit_of_measurement: h
+    mode: box
+    min_value: 0
+    max_value: 8
+    step: 1
+    update_interval: 1s
+    lambda: return yamazen::timer_hours();
+    set_action:
+      - lambda: |-
+          if (x == static_cast<int>(x)) {
+            yamazen::set_timer(static_cast<int>(x));
+          }
+
+button:
   - platform: template
     name: Fan Step
     on_press:
@@ -100,10 +128,6 @@ button:
     name: Sleep Toggle
     on_press:
       - lambda: yamazen::press("sleep");
-  - platform: template
-    name: Timer Step
-    on_press:
-      - lambda: yamazen::press("timer");
 
 sensor:
   - platform: template

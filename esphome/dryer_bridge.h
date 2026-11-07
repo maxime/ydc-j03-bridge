@@ -14,5 +14,7 @@ void set_timer(int hours);
 std::string display();
 std::optional<bool> power();
 float humidity();
+float humidity_target();
+float timer_hours();
 
 }  // namespace yamazen
