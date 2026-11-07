@@ -31,7 +31,7 @@ esphome run esphome/yamazen-air-dryer.yaml
 
 Add the discovered ESPHome device in Home Assistant and enter the same encryption key. If discovery is unavailable, add the ESPHome integration manually using the ESP32's IP address.
 
-Home Assistant gets a Power switch, a Humidity sensor for history, and a Panel Display text sensor. Enter a Humidity Target or Shutoff Timer directly. Each field shows the last setting the bridge confirmed. The Fan Step and Sleep Toggle buttons match their physical counterparts. Humidity history pauses while the panel is off or showing nonnumeric text, and during timer or setpoint adjustments and for 10 seconds afterward.
+Home Assistant gets a Power switch, a Humidity sensor for history, and a Panel Display text sensor. Enter a Humidity Target or Shutoff Timer directly. Each field shows the last setting the bridge confirmed. Fan Speed offers Low and High and follows the physical panel while the dryer is running. Sleep Toggle is separate and forces the fan to Low until you leave Sleep mode. Humidity history pauses while the panel is off or showing nonnumeric text, and during timer or setpoint adjustments and for 10 seconds afterward.
 
 | Home Assistant action | Input |
 | --- | --- |

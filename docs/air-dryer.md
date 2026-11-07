@@ -34,6 +34,8 @@ The wire is an NEC-style pulse-distance 1-wire protocol that idles high. Each fr
 - **Panel → Main** is 3 bytes (24 bits): `[0x30, button_mask, checksum]`, where `button_mask` is `0x00` idle, `0x01` On/Off, `0x02` Humidity, `0x04` Timer, `0x08` Sleep, `0x10` Fan.
 - **Main → Panel** is 9 bytes (72 bits): `[0x90, digit1_7seg, digit2_7seg, ..., checksum]`. `digit1_7seg` and `digit2_7seg` are standard 7-segment codes (`0x3F`=`0`, `0x06`=`1`, `0x5B`=`2`, `0x4F`=`3`, `0x66`=`4`, `0x6D`=`5`, `0x7D`=`6`, `0x07`=`7`, `0x7F`=`8`, `0x6F`=`9`, `0x00`=blank).
 
+The ESPHome fan selector reads byte 5 (zero-based) of the decoded main frame. Bit `0x20` means Low, `0x40` means High, and `0x80` marks Sleep. Captured values were `0x21` on Low, `0x41` on High, `0xA1` on Low in Sleep mode, and `0x00` in standby.
+
 The hex in the Telnet log is what a 4800 8N1 UART reads from those pulses (`00` for the start pulse, then `A9`/`AF`/`B9`/`E9`/`EF`/`F9`). A `FF` between frames is the idle gap, not a data byte.
 
 ## Frames

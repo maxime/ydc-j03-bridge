@@ -68,7 +68,9 @@ const DryerCommand kCommands[] = {
     {"timer", 9, 1, {0x00, 0xE9, 0xAF, 0xA9, 0xA9, 0xE9, 0xA9, 0xEF, 0xF9}},
 };
 
-enum class RequestKind { Press, SetPower, SetHumidity, SetTimer };
+constexpr size_t kFanCommandIndex = 3;
+
+enum class RequestKind { Press, SetPower, SetFanSpeed, SetHumidity, SetTimer };
 
 struct Request {
   RequestKind kind;
@@ -120,6 +122,9 @@ struct PanelStatus {
   char text[sizeof(panelText)] = "--";
   std::optional<bool> power;
   uint32_t observedAt = 0;
+  std::optional<bool> fanHigh;
+  uint32_t fanObservedAt = 0;
+  bool sleeping = false;
   int humidity = -1;
   int humidityTarget = -1;
   int timerHours = -1;
@@ -130,12 +135,24 @@ static_assert(std::is_trivially_copyable_v<PanelStatus>);
 PanelStatus panelStatus;
 std::optional<uint32_t> adjustmentAt;
 std::optional<uint32_t> powerPressedAt;
+std::optional<uint32_t> fanPressedAt;
 bool settingTarget = false;
 // shortcut: estimate how long settings stay on-screen until the panel mode is decoded.
 constexpr uint32_t kAdjustmentMs = 10000;
 constexpr uint32_t kPanelFreshMs = 10000;
-constexpr uint32_t kPowerSettleMs = 2000;
+constexpr uint32_t kButtonSettleMs = 2000;
 constexpr int kMaxTimerHours = 8;
+
+constexpr std::optional<bool> decodeFanHigh(uint8_t flags) {
+  switch (flags & 0x60) {
+    case 0x20: return false;
+    case 0x40: return true;
+    default: return std::nullopt;
+  }
+}
+
+static_assert(decodeFanHigh(0x21) == false && decodeFanHigh(0x41) == true &&
+              decodeFanHigh(0xA1) == false && !decodeFanHigh(0x00) && !decodeFanHigh(0x60));
 
 constexpr int displayHumidity(std::string_view text) {
   if (text.empty() || text.size() > 2) {
@@ -174,14 +191,25 @@ bool adjustingDisplay(uint32_t now) {
   return settingTarget || (adjustmentAt && now - *adjustmentAt < kAdjustmentMs);
 }
 
-void updatePanelStatus() {
+void updatePanelStatus(std::optional<uint8_t> statusFlags = std::nullopt) {
   memcpy(panelStatus.text, panelText, sizeof(panelText));
   const uint32_t now = millis();
+  if (statusFlags) {
+    const auto high = decodeFanHigh(*statusFlags);
+    const bool sleeping = (*statusFlags & 0x80) != 0;
+    if (fanPressedAt && high && (high != panelStatus.fanHigh || sleeping != panelStatus.sleeping ||
+                                now - *fanPressedAt >= kButtonSettleMs)) {
+      fanPressedAt.reset();
+    }
+    panelStatus.fanHigh = high;
+    panelStatus.fanObservedAt = now;
+    panelStatus.sleeping = sleeping;
+  }
   if (!adjustingDisplay(now)) {
     adjustmentAt.reset();
     const auto power = displayPower(panelText);
     if (powerPressedAt && power &&
-        (power != panelStatus.power || now - *powerPressedAt >= kPowerSettleMs)) {
+        (power != panelStatus.power || now - *powerPressedAt >= kButtonSettleMs)) {
       powerPressedAt.reset();
     }
     panelStatus.power = power;
@@ -208,8 +236,11 @@ void notePanelCommand(const char* name) {
     panelStatus.timerHours = -1;
     pauseHumidity();
   } else if (strcmp(name, "sleep") == 0) {
+    fanPressedAt = millis();
     panelStatus.humidityTarget = -1;
     publishPanelStatus();
+  } else if (strcmp(name, "fan") == 0) {
+    fanPressedAt = millis();
   } else if (strcmp(name, "on") == 0 || strcmp(name, "off") == 0) {
     powerPressedAt = millis();
   }
@@ -217,6 +248,10 @@ void notePanelCommand(const char* name) {
 
 std::optional<bool> observedPower(const PanelStatus& status, uint32_t now) {
   return now - status.observedAt <= kPanelFreshMs ? status.power : std::nullopt;
+}
+
+std::optional<bool> observedFanHigh(const PanelStatus& status, uint32_t now) {
+  return now - status.fanObservedAt <= kPanelFreshMs ? status.fanHigh : std::nullopt;
 }
 
 // Measured panel On burst. Replaying these 54 edges toggles the fan.
@@ -515,7 +550,7 @@ void describeMainChange(const uint8_t* frame, size_t len, char* out, size_t outL
     }
     seenSeq = seq;
     formatPanelDisplay(raw[1], raw[2], panelText, sizeof(panelText));
-    updatePanelStatus();
+    updatePanelStatus(raw[0] == 0x90 ? std::optional<uint8_t>(raw[5]) : std::nullopt);
     snprintf(mainHex, sizeof(mainHex), "%02X %02X %02X %02X %02X %02X %02X %02X %02X",
              raw[0], raw[1], raw[2], raw[3], raw[4], raw[5], raw[6], raw[7], raw[8]);
     snprintf(out, outLen, " display=%s [%s]", panelText, mainHex);
@@ -1420,6 +1455,18 @@ void serviceHomeAssistant() {
       ok = sendPanelPress(kCommands[0]);
       break;
     }
+    case RequestKind::SetFanSpeed: {
+      const auto high = observedFanHigh(panelStatus, millis());
+      if (high && *high == (request.value != 0)) {
+        return;
+      }
+      if (!high || fanPressedAt || powerPressedAt || panelStatus.sleeping) {
+        ESP_LOGW("yamazen", "Fan speed can be changed when the current speed is known and Sleep is off");
+        return;
+      }
+      ok = sendPanelPress(kCommands[kFanCommandIndex]);
+      break;
+    }
     case RequestKind::SetHumidity:
       ok = setDisplayTarget(setHumidityPercent, request.value);
       break;
@@ -1555,6 +1602,10 @@ void set_power(bool on) {
   enqueue(RequestKind::SetPower, on);
 }
 
+void set_fan_speed(bool high) {
+  enqueue(RequestKind::SetFanSpeed, high);
+}
+
 void set_humidity(int percent) {
   enqueue(RequestKind::SetHumidity, percent);
 }
@@ -1569,6 +1620,13 @@ std::string display() {
 
 std::optional<bool> power() {
   return observedPower(readPanelStatus(), millis());
+}
+
+std::optional<std::string> fan_speed() {
+  if (const auto high = observedFanHigh(readPanelStatus(), millis())) {
+    return *high ? "High" : "Low";
+  }
+  return std::nullopt;
 }
 
 float humidity() {

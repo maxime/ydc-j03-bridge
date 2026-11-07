@@ -119,11 +119,18 @@ number:
             yamazen::set_timer(static_cast<int>(x));
           }
 
-button:
+select:
   - platform: template
-    name: Fan Step
-    on_press:
-      - lambda: yamazen::press("fan");
+    name: Fan Speed
+    options:
+      - Low
+      - High
+    update_interval: 1s
+    lambda: return yamazen::fan_speed();
+    set_action:
+      - lambda: yamazen::set_fan_speed(x == "High");
+
+button:
   - platform: template
     name: Sleep Toggle
     on_press:
