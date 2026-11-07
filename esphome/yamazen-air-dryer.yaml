@@ -1,0 +1,128 @@
+esphome:
+  name: yamazen-air-dryer
+  friendly_name: Yamazen Air Dryer
+  min_version: 2026.10.2
+  includes:
+    - dryer_bridge.h
+    - dryer_bridge.cpp
+  build_flags:
+    - -DARDUINO_USB_MODE=1
+    - -DARDUINO_USB_CDC_ON_BOOT=1
+  libraries:
+    - FS
+    - Hash
+    - Network
+    - Preferences
+    - WebServer
+  on_boot:
+    priority: 1000
+    then:
+      - lambda: yamazen::start();
+      # Give the wired panel time to finish its power-on exchange.
+      - delay: 3s
+      - wifi.enable:
+
+esp32:
+  board: esp32-s3-devkitc-1
+  flash_size: 16MB
+  flash_mode: qio
+  partitions: partitions.csv
+  cpu_frequency: 240MHz
+  framework:
+    type: arduino
+    sdkconfig_options:
+      # ESPHome runs on core 1. Leave core 0 to the polling bridge.
+      CONFIG_ESP_WIFI_TASK_PINNED_TO_CORE_1: y
+      CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU1: y
+      CONFIG_ESP_TIMER_SHOW_EXPERIMENTAL: y
+      CONFIG_ESP_TIMER_TASK_AFFINITY_CPU1: y
+      CONFIG_ESP_TIMER_ISR_AFFINITY_CPU1: y
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  enable_on_boot: false
+  reboot_timeout: 0s
+  on_connect:
+    - lambda: yamazen::network_connected();
+
+logger:
+  baud_rate: 0  # The original frame log uses the USB serial port.
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+  reboot_timeout: 0s
+  actions:
+    - action: set_humidity
+      variables:
+        percent: int
+      then:
+        - lambda: yamazen::set_humidity(percent);
+    - action: set_timer
+      variables:
+        hours: int
+      then:
+        - lambda: yamazen::set_timer(hours);
+
+ota:
+  - platform: esphome
+    encryption:
+
+safe_mode:
+  on_safe_mode:
+    - wifi.enable:
+
+switch:
+  - platform: template
+    name: Power
+    restore_mode: DISABLED
+    lambda: return yamazen::power();
+    turn_on_action:
+      - lambda: yamazen::set_power(true);
+    turn_off_action:
+      - lambda: yamazen::set_power(false);
+
+button:
+  - platform: template
+    name: Humidity Step
+    on_press:
+      - lambda: yamazen::press("humidity");
+  - platform: template
+    name: Fan Step
+    on_press:
+      - lambda: yamazen::press("fan");
+  - platform: template
+    name: Sleep Toggle
+    on_press:
+      - lambda: yamazen::press("sleep");
+  - platform: template
+    name: Timer Step
+    on_press:
+      - lambda: yamazen::press("timer");
+
+sensor:
+  - platform: template
+    name: Humidity
+    device_class: humidity
+    state_class: measurement
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    update_interval: 5s
+    lambda: return yamazen::humidity();
+
+text_sensor:
+  - platform: template
+    name: Panel Display
+    id: panel_display
+    update_interval: 1s
+    lambda: |-
+      auto display = yamazen::display();
+      if (id(panel_display).has_state() && id(panel_display).state == display) {
+        return {};
+      }
+      return display;
