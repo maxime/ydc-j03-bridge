@@ -56,12 +56,12 @@ struct DryerCommand {
 };
 
 const DryerCommand kCommands[] = {
-    {"on", 8, 5, {0x00, 0xE9, 0xAF, 0xA9, 0xA9, 0xB9, 0xA9, 0xB9}},
-    {"off", 9, 1, {0x00, 0x89, 0xA8, 0xA9, 0xA9, 0x21, 0x29, 0x21, 0x0E}},
-    {"humidity", 9, 1, {0x00, 0x89, 0xA8, 0xA9, 0xA9, 0x28, 0x2B, 0xA8, 0x0E}},
-    {"fan", 9, 1, {0x00, 0x89, 0xA8, 0xA9, 0x89, 0x29, 0x8B, 0x89, 0x39}},
-    {"sleep", 9, 1, {0x00, 0x89, 0xA8, 0xA9, 0xA1, 0x29, 0x8B, 0x28, 0x39}},
-    {"timer", 9, 1, {0x00, 0x89, 0xA8, 0xA9, 0x29, 0x89, 0x2B, 0x88, 0x39}},
+    {"on", 8, 1, {0x00, 0xE9, 0xAF, 0xA9, 0xA9, 0xB9, 0xA9, 0xB9}},
+    {"off", 8, 1, {0x00, 0xE9, 0xAF, 0xA9, 0xA9, 0xB9, 0xA9, 0xB9}},
+    {"humidity", 8, 1, {0x00, 0xE9, 0xAF, 0xA9, 0xA9, 0xAF, 0xA9, 0xAF}},
+    {"fan", 9, 1, {0x00, 0xE9, 0xAF, 0xA9, 0xE9, 0xA9, 0xE9, 0xE9, 0xF9}},
+    {"sleep", 9, 1, {0x00, 0xE9, 0xAF, 0xA9, 0xB9, 0xA9, 0xE9, 0xAF, 0xF9}},
+    {"timer", 9, 1, {0x00, 0xE9, 0xAF, 0xA9, 0xA9, 0xE9, 0xA9, 0xEF, 0xF9}},
 };
 
 struct Burst {
@@ -91,12 +91,16 @@ static volatile uint32_t edgeReadyMs = 0;
 static PulseEdge onWave[kEdgeMax];
 static uint16_t onWaveLen = 0;
 static volatile bool onWaveReady = false;
+static volatile uint32_t blockPanelUntil = 0;
 static volatile bool replayReq = false;
 static volatile bool replayBusy = false;
 static volatile bool replayDone = false;
 static const PulseEdge* volatile replayEdges = nullptr;
 static volatile uint16_t replayLen = 0;
-static bool dumpedPanel = false;
+static volatile uint8_t mainRaw[9];
+static volatile uint32_t mainRawSeq = 0;
+static char panelText[8] = "--";
+static char mainHex[32] = "";
 static Preferences waveStore;
 
 // Measured panel On burst. Replaying these 54 edges toggles the fan.
@@ -112,6 +116,62 @@ static const PulseEdge kOnEdges[] = {
     {251, 0}, {250, 1}, {752, 0}, {249, 1}, {752, 0}, {250, 1},
 };
 static const uint16_t kOnEdgeCount = sizeof(kOnEdges) / sizeof(kOnEdges[0]);
+
+// Panel Humidity. Frame 00 E9 AF A9 A9 AF A9 AF.
+static const PulseEdge kHumidityEdges[] = {
+    {0, 0}, {17, 1}, {108, 0}, {4381, 1}, {2254, 0}, {250, 1},
+    {251, 0}, {250, 1}, {251, 0}, {249, 1}, {752, 0}, {262, 1},
+    {740, 0}, {274, 1}, {226, 0}, {250, 1}, {251, 0}, {250, 1},
+    {251, 0}, {250, 1}, {251, 0}, {250, 1}, {250, 0}, {250, 1},
+    {251, 0}, {250, 1}, {251, 0}, {250, 1}, {250, 0}, {251, 1},
+    {250, 0}, {250, 1}, {251, 0}, {250, 1}, {752, 0}, {250, 1},
+    {250, 0}, {250, 1}, {752, 0}, {250, 1}, {251, 0}, {274, 1},
+    {226, 0}, {250, 1}, {251, 0}, {250, 1}, {751, 0}, {250, 1},
+    {752, 0}, {250, 1}, {251, 0}, {249, 1}, {252, 0}, {250, 1},
+};
+static const uint16_t kHumidityEdgeCount = sizeof(kHumidityEdges) / sizeof(kHumidityEdges[0]);
+
+// Panel Fan, pressed twice as the same frame 00 E9 AF A9 E9 A9 E9 E9 F9.
+static const PulseEdge kFanEdges[] = {
+    {0, 0}, {17, 1}, {108, 0}, {4381, 1}, {2254, 0}, {250, 1},
+    {251, 0}, {250, 1}, {251, 0}, {250, 1}, {751, 0}, {267, 1},
+    {735, 0}, {274, 1}, {226, 0}, {250, 1}, {251, 0}, {250, 1},
+    {251, 0}, {250, 1}, {251, 0}, {249, 1}, {252, 0}, {249, 1},
+    {251, 0}, {250, 1}, {251, 0}, {250, 1}, {251, 0}, {249, 1},
+    {752, 0}, {250, 1}, {251, 0}, {250, 1}, {251, 0}, {249, 1},
+    {251, 0}, {250, 1}, {752, 0}, {250, 1}, {251, 0}, {274, 1},
+    {226, 0}, {250, 1}, {752, 0}, {250, 1}, {250, 0}, {250, 1},
+    {251, 0}, {250, 1}, {752, 0}, {249, 1}, {251, 0}, {250, 1},
+};
+static const uint16_t kFanEdgeCount = sizeof(kFanEdges) / sizeof(kFanEdges[0]);
+
+// Panel Sleep. Frame 00 E9 AF A9 B9 A9 E9 AF F9.
+static const PulseEdge kSleepEdges[] = {
+    {0, 0}, {21, 1}, {104, 0}, {4382, 1}, {2253, 0}, {250, 1},
+    {251, 0}, {250, 1}, {251, 0}, {250, 1}, {751, 0}, {262, 1},
+    {740, 0}, {275, 1}, {226, 0}, {250, 1}, {251, 0}, {249, 1},
+    {252, 0}, {249, 1}, {251, 0}, {250, 1}, {251, 0}, {250, 1},
+    {251, 0}, {249, 1}, {251, 0}, {250, 1}, {752, 0}, {250, 1},
+    {251, 0}, {249, 1}, {252, 0}, {249, 1}, {251, 0}, {250, 1},
+    {251, 0}, {250, 1}, {752, 0}, {249, 1}, {251, 0}, {275, 1},
+    {226, 0}, {250, 1}, {752, 0}, {250, 1}, {751, 0}, {250, 1},
+    {251, 0}, {250, 1}, {751, 0}, {250, 1}, {251, 0}, {250, 1},
+};
+static const uint16_t kSleepEdgeCount = sizeof(kSleepEdges) / sizeof(kSleepEdges[0]);
+
+// Panel Timer. Frame 00 E9 AF A9 A9 E9 A9 EF F9. One press, one train.
+static const PulseEdge kTimerEdges[] = {
+    {0, 0}, {20, 1}, {106, 0}, {4381, 1}, {2254, 0}, {250, 1},
+    {250, 0}, {250, 1}, {251, 0}, {250, 1}, {752, 0}, {261, 1},
+    {740, 0}, {275, 1}, {226, 0}, {250, 1}, {251, 0}, {249, 1},
+    {251, 0}, {250, 1}, {251, 0}, {250, 1}, {251, 0}, {250, 1},
+    {251, 0}, {249, 1}, {251, 0}, {250, 1}, {251, 0}, {250, 1},
+    {252, 0}, {249, 1}, {751, 0}, {250, 1}, {251, 0}, {250, 1},
+    {251, 0}, {250, 1}, {751, 0}, {250, 1}, {251, 0}, {275, 1},
+    {226, 0}, {250, 1}, {251, 0}, {250, 1}, {751, 0}, {250, 1},
+    {752, 0}, {249, 1}, {752, 0}, {250, 1}, {251, 0}, {250, 1},
+};
+static const uint16_t kTimerEdgeCount = sizeof(kTimerEdges) / sizeof(kTimerEdges[0]);
 
 void paintLed() {
   bool connected = client && client.connected();
@@ -250,8 +310,131 @@ const char* frameName(const uint8_t* frame, size_t len) {
   return "";
 }
 
+char decodeSeg7(uint8_t v) {
+  switch (v & 0x7F) {
+    case 0x3F: return '0';
+    case 0x06: return '1';
+    case 0x5B: return '2';
+    case 0x4F: return '3';
+    case 0x66: return '4';
+    case 0x6D: return '5';
+    case 0x7D: return '6';
+    case 0x07: return '7';
+    case 0x7F: return '8';
+    case 0x6F: return '9';
+    case 0x76: return 'H';
+    case 0x30: return 'I';
+    case 0x38: return 'L';
+    case 0x79: return 'E';
+    case 0x00: return ' ';
+    default: return '?';
+  }
+}
+
+int decodeSeg7Digit(uint8_t v) {
+  char c = decodeSeg7(v);
+  return (c >= '0' && c <= '9') ? (c - '0') : -1;
+}
+
+int decodeDisplayNumber(uint8_t d1, uint8_t d2) {
+  if (d1 == 0x00 && d2 == 0x00) {
+    return -1;
+  }
+  int hi = (d1 == 0x00) ? 0 : decodeSeg7Digit(d1);
+  int lo = decodeSeg7Digit(d2);
+  if (hi < 0 || lo < 0) {
+    return -1;
+  }
+  return hi * 10 + lo;
+}
+
+void formatPanelDisplay(uint8_t d1, uint8_t d2, char* out, size_t outLen) {
+  char c1 = decodeSeg7(d1);
+  char c2 = decodeSeg7(d2);
+  if (c1 == ' ' && c2 == ' ') {
+    snprintf(out, outLen, "off");
+  } else if (c1 == ' ') {
+    snprintf(out, outLen, "%c", c2);
+  } else {
+    snprintf(out, outLen, "%c%c", c1, c2);
+  }
+}
+
+bool decodeUartDisplay(const uint8_t* frame, size_t len, char* out, size_t outLen) {
+  if (len < 10 || frame[0] != 0x00) {
+    return false;
+  }
+  int8_t pat[80];
+  size_t nb = 0;
+  for (size_t i = 1; i < len && nb + 4 <= sizeof(pat); i++) {
+    switch (frame[i]) {
+      case 0xEF: pat[nb++] = 1; pat[nb++] = 1; break;
+      case 0xE9: pat[nb++] = 0; pat[nb++] = 0; pat[nb++] = 1; break;
+      case 0xB9: pat[nb++] = 0; pat[nb++] = 1; pat[nb++] = -1; break;
+      case 0xAF: pat[nb++] = 1; pat[nb++] = 0; pat[nb++] = -1; break;
+      case 0xA9: pat[nb++] = 0; pat[nb++] = 0; pat[nb++] = 0; pat[nb++] = -1; break;
+      case 0xF9: pat[nb++] = 0; pat[nb++] = -1; break;
+      default: return false;
+    }
+  }
+  if (nb < 24) {
+    return false;
+  }
+  static const uint8_t kKnown[] = {0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07,
+                                   0x7F, 0x6F, 0x00, 0x76, 0x30, 0x38, 0x79};
+  auto matchByte = [&](size_t off, uint8_t* matched) -> bool {
+    uint8_t found = 0;
+    int count = 0;
+    for (uint8_t code : kKnown) {
+      bool ok = true;
+      for (size_t b = 0; b < 8; b++) {
+        int8_t want = (code >> (7 - b)) & 1;
+        if (pat[off + b] != -1 && pat[off + b] != want) {
+          ok = false;
+          break;
+        }
+      }
+      if (ok) {
+        found = code;
+        count++;
+      }
+    }
+    if (count == 1) {
+      *matched = found;
+      return true;
+    }
+    return false;
+  };
+  uint8_t d1 = 0, d2 = 0;
+  if (!matchByte(8, &d1) || !matchByte(16, &d2)) {
+    return false;
+  }
+  formatPanelDisplay(d1, d2, out, outLen);
+  return true;
+}
+
 void describeMainChange(const uint8_t* frame, size_t len, char* out, size_t outLen) {
   out[0] = '\0';
+  static uint32_t seenSeq = 0;
+  uint32_t seq = mainRawSeq;
+  if (seq != 0 && seq != seenSeq) {
+    uint8_t raw[9];
+    for (int i = 0; i < 9; i++) {
+      raw[i] = mainRaw[i];
+    }
+    seenSeq = seq;
+    formatPanelDisplay(raw[1], raw[2], panelText, sizeof(panelText));
+    snprintf(mainHex, sizeof(mainHex), "%02X %02X %02X %02X %02X %02X %02X %02X %02X",
+             raw[0], raw[1], raw[2], raw[3], raw[4], raw[5], raw[6], raw[7], raw[8]);
+    snprintf(out, outLen, " display=%s [%s]", panelText, mainHex);
+    return;
+  }
+  char disp[8];
+  if (decodeUartDisplay(frame, len, disp, sizeof(disp))) {
+    snprintf(panelText, sizeof(panelText), "%s", disp);
+    snprintf(out, outLen, " display=%s", panelText);
+    return;
+  }
   if (len != 9) {
     return;
   }
@@ -287,7 +470,22 @@ void describeMainChange(const uint8_t* frame, size_t len, char* out, size_t outL
   snprintf(out, outLen, "%s", diff[0] ? diff : " unchanged");
 }
 
-void keepPanelWave(bool storeOn);
+void keepPanelWave(bool storeOn, const uint8_t* frame, size_t len);
+
+bool panelIdle(const uint8_t* frame, size_t len) {
+  static const uint8_t head[] = {0x00, 0xE9, 0xAF, 0xA9, 0xA9};
+  if (len < 6 || memcmp(frame, head, 5) != 0) {
+    return false;
+  }
+  if (frame[5] != 0xE9 && frame[5] != 0xEB) {
+    return false;
+  }
+  // Timer is 00 E9 AF A9 A9 E9 A9 EF F9. The idle hello ends in B9.
+  if (len >= 8 && frame[7] != 0xB9 && frame[7] != 0x39) {
+    return false;
+  }
+  return true;
+}
 
 void logFrame(const char* dir, const uint8_t* frame, size_t len) {
   char line[220];
@@ -296,8 +494,14 @@ void logFrame(const char* dir, const uint8_t* frame, size_t len) {
     n += snprintf(line + n, sizeof(line) - n, " %02X", frame[i]);
   }
   const char* name = frameName(frame, len);
-  if (strcmp(dir, "panel") == 0) {
-    keepPanelWave(strcmp(name, "on") == 0);
+  if (strcmp(dir, "panel") == 0 && !panelIdle(frame, len)) {
+    keepPanelWave(strcmp(name, "on") == 0, frame, len);
+    // The panel repeats a step while it is waiting to see the new status.
+    // The first train has already been copied. Hold the later ones off the main board.
+    if (strcmp(name, "humidity") == 0 || strcmp(name, "fan") == 0 || strcmp(name, "sleep") == 0 ||
+        strcmp(name, "timer") == 0) {
+      blockPanelUntil = millis() + 2000;
+    }
   }
   if (name[0] && n > 0 && n < (int)sizeof(line) - 16) {
     n += snprintf(line + n, sizeof(line) - n, " %s", name);
@@ -460,8 +664,8 @@ void loadOnWave() {
   }
 }
 
-void keepPanelWave(bool storeOn) {
-  if (replayBusy || (!storeOn && dumpedPanel) || !edgeReadySlot || millis() - edgeReadyMs > 1000) {
+void keepPanelWave(bool storeOn, const uint8_t* frame, size_t len) {
+  if (replayBusy || !edgeReadySlot || millis() - edgeReadyMs > 1000) {
     return;
   }
   uint8_t slot = edgeReadySlot - 1;
@@ -475,9 +679,21 @@ void keepPanelWave(bool storeOn) {
     onWaveReady = true;
     saveOnWave();
   }
-  dumpedPanel = true;
+  char tag[40];
+  if (storeOn) {
+    snprintf(tag, sizeof(tag), "on");
+  } else {
+    size_t used = 0;
+    for (size_t i = 0; i < len && used + 2 < sizeof(tag); i++) {
+      int m = snprintf(tag + used, sizeof(tag) - used, "%02X", frame[i]);
+      if (m < 0) {
+        break;
+      }
+      used += (size_t)m;
+    }
+  }
   edgeReadySlot = 0;
-  dumpWave(storeOn ? "on" : "panel", storeOn ? onWave : edgeSlots[slot], n);
+  dumpWave(tag, storeOn ? onWave : edgeSlots[slot], n);
 }
 
 void IRAM_ATTR playOnWave(uint32_t mainOut) {
@@ -508,6 +724,10 @@ void IRAM_ATTR mirrorLoop() {
   uint32_t prevLevel = (GPIO.in & panelIn) ? 1 : 0;
   uint32_t prevUs = micros();
   uint16_t edgeCount = 0;
+  uint32_t mainPrevLevel = (GPIO.in & mainIn) ? 1 : 0;
+  uint32_t mainPrevUs = prevUs;
+  uint8_t mainBytes[9];
+  int8_t mainBitPos = -1;
   while (passThrough) {
     if (replayReq) {
       playOnWave(mainOut);
@@ -548,7 +768,41 @@ void IRAM_ATTR mirrorLoop() {
       edgeWrite ^= 1;
       edgeCount = 0;
     }
-    if (in & panelIn) {
+    uint32_t mainLevel = (in & mainIn) ? 1 : 0;
+    if (mainLevel != mainPrevLevel) {
+      uint32_t now = micros();
+      uint32_t dt = now - mainPrevUs;
+      mainPrevUs = now;
+      mainPrevLevel = mainLevel;
+      if (mainLevel == 0) {
+        if (dt > 1500 && dt < 3200) {
+          memset(mainBytes, 0, sizeof(mainBytes));
+          mainBitPos = 0;
+        } else if (mainBitPos >= 0 && mainBitPos < 72 && dt > 120 && dt < 1200) {
+          if (dt > 500) {
+            mainBytes[mainBitPos >> 3] |= 1u << (7 - (mainBitPos & 7));
+          }
+          mainBitPos++;
+          if (mainBitPos == 72) {
+            uint8_t sum = 0x5A;
+            for (int i = 0; i < 8; i++) {
+              sum += mainBytes[i];
+            }
+            if (sum == mainBytes[8]) {
+              for (int i = 0; i < 9; i++) {
+                mainRaw[i] = mainBytes[i];
+              }
+              mainRawSeq++;
+            }
+            mainBitPos = -1;
+          }
+        } else {
+          mainBitPos = -1;
+        }
+      }
+    }
+    bool blockPanel = (int32_t)(blockPanelUntil - millis()) > 0;
+    if (blockPanel || (in & panelIn)) {
       GPIO.out_w1ts = mainOut;
     } else {
       GPIO.out_w1tc = mainOut;
@@ -589,10 +843,46 @@ void bangFrame(const DryerCommand& cmd) {
   }
 }
 
+bool savedWave(const char* name, const PulseEdge** edges, uint16_t* count) {
+  if (strcmp(name, "on") == 0 || strcmp(name, "off") == 0) {
+    if (onWaveReady) {
+      *edges = onWave;
+      *count = onWaveLen;
+    } else {
+      *edges = kOnEdges;
+      *count = kOnEdgeCount;
+    }
+    return true;
+  }
+  if (strcmp(name, "humidity") == 0) {
+    *edges = kHumidityEdges;
+    *count = kHumidityEdgeCount;
+    return true;
+  }
+  if (strcmp(name, "fan") == 0) {
+    *edges = kFanEdges;
+    *count = kFanEdgeCount;
+    return true;
+  }
+  if (strcmp(name, "sleep") == 0) {
+    *edges = kSleepEdges;
+    *count = kSleepEdgeCount;
+    return true;
+  }
+  if (strcmp(name, "timer") == 0) {
+    *edges = kTimerEdges;
+    *count = kTimerEdgeCount;
+    return true;
+  }
+  return false;
+}
+
 bool sendFrame(const DryerCommand& cmd) {
-  if (strcmp(cmd.name, "on") == 0 || strcmp(cmd.name, "off") == 0) {
-    replayEdges = onWaveReady ? onWave : kOnEdges;
-    replayLen = onWaveReady ? onWaveLen : kOnEdgeCount;
+  const PulseEdge* edges = nullptr;
+  uint16_t count = 0;
+  if (savedWave(cmd.name, &edges, &count)) {
+    replayEdges = edges;
+    replayLen = count;
     replayBusy = true;
     replayDone = false;
     replayReq = true;
@@ -635,6 +925,106 @@ bool sendFrame(const DryerCommand& cmd) {
   logLine(line, n);
   pulse(4);
   return true;
+}
+
+int waitNextDisplayNumber(uint32_t afterSeq, uint32_t timeoutMs) {
+  uint32_t start = millis();
+  uint32_t lastSeq = afterSeq;
+  while (millis() - start < timeoutMs) {
+    takeBytes(panelBurst);
+    takeBytes(mainBurst);
+    pumpReplay();
+    uint32_t seq = mainRawSeq;
+    if (seq != lastSeq) {
+      uint8_t d1 = mainRaw[1];
+      uint8_t d2 = mainRaw[2];
+      lastSeq = seq;
+      int val = decodeDisplayNumber(d1, d2);
+      if (val >= 0) {
+        return val;
+      }
+    }
+    delay(5);
+  }
+  return -1;
+}
+
+// Steps the Timer button until the panel's 2-digit display shows `targetHours` (0..24).
+// The first press wakes the timer display; subsequent presses increment by 1 hour.
+bool setTimerHours(int targetHours, int* finalHours = nullptr) {
+  if (targetHours < 0 || targetHours > 24) {
+    return false;
+  }
+  const DryerCommand* timerCmd = nullptr;
+  for (size_t i = 0; i < sizeof(kCommands) / sizeof(kCommands[0]); i++) {
+    if (strcmp(kCommands[i].name, "timer") == 0) {
+      timerCmd = &kCommands[i];
+      break;
+    }
+  }
+  if (!timerCmd) {
+    return false;
+  }
+  for (int step = 0; step < 28; step++) {
+    uint32_t seqBefore = mainRawSeq;
+    if (!sendFrame(*timerCmd)) {
+      return false;
+    }
+    // Wait for at least one new main frame after the replay so we read the updated digit.
+    delay(120);
+    int shown = waitNextDisplayNumber(seqBefore + 1, 900);
+    if (finalHours) {
+      *finalHours = shown;
+    }
+    if (shown == targetHours) {
+      char line[64];
+      int n = snprintf(line, sizeof(line), "telnet %lu timer set to %02d\n", millis(), shown);
+      if (n > 0) {
+        logLine(line, (size_t)n);
+      }
+      return true;
+    }
+    delay(260);
+  }
+  return false;
+}
+
+// Steps the Humidity button until the panel's 2-digit display shows `targetPercent` (40..70, step 5).
+bool setHumidityPercent(int targetPercent, int* finalPercent = nullptr) {
+  if (targetPercent < 40 || targetPercent > 70 || (targetPercent % 5) != 0) {
+    return false;
+  }
+  const DryerCommand* humCmd = nullptr;
+  for (size_t i = 0; i < sizeof(kCommands) / sizeof(kCommands[0]); i++) {
+    if (strcmp(kCommands[i].name, "humidity") == 0) {
+      humCmd = &kCommands[i];
+      break;
+    }
+  }
+  if (!humCmd) {
+    return false;
+  }
+  for (int step = 0; step < 10; step++) {
+    uint32_t seqBefore = mainRawSeq;
+    if (!sendFrame(*humCmd)) {
+      return false;
+    }
+    delay(120);
+    int shown = waitNextDisplayNumber(seqBefore + 1, 900);
+    if (finalPercent) {
+      *finalPercent = shown;
+    }
+    if (shown == targetPercent) {
+      char line[64];
+      int n = snprintf(line, sizeof(line), "telnet %lu humidity set to %d%%\n", millis(), shown);
+      if (n > 0) {
+        logLine(line, (size_t)n);
+      }
+      return true;
+    }
+    delay(260);
+  }
+  return false;
 }
 
 void runCommand(char* text) {
@@ -701,6 +1091,44 @@ void runCommand(char* text) {
     describeMode();
     return;
   }
+  if (strncasecmp(text, "humidity ", 9) == 0) {
+    char* arg = text + 9;
+    while (*arg == ' ') {
+      arg++;
+    }
+    if (*arg >= '0' && *arg <= '9') {
+      int target = atoi(arg);
+      int got = -1;
+      bool ok = setHumidityPercent(target, &got);
+      if (client && client.connected()) {
+        if (ok) {
+          client.printf("humidity set to %d%%\n", got);
+        } else {
+          client.printf("humidity failed (40..70 step 5, last=%d)\n", got);
+        }
+      }
+      return;
+    }
+  }
+  if (strncasecmp(text, "timer ", 6) == 0) {
+    char* arg = text + 6;
+    while (*arg == ' ') {
+      arg++;
+    }
+    if (*arg >= '0' && *arg <= '9') {
+      int target = atoi(arg);
+      int got = -1;
+      bool ok = setTimerHours(target, &got);
+      if (client && client.connected()) {
+        if (ok) {
+          client.printf("timer set to %02d\n", got);
+        } else {
+          client.printf("timer failed (last=%d)\n", got);
+        }
+      }
+      return;
+    }
+  }
   for (size_t i = 0; i < sizeof(kCommands) / sizeof(kCommands[0]); i++) {
     if (strcasecmp(text, kCommands[i].name) == 0) {
       sendFrame(kCommands[i]);
@@ -719,25 +1147,67 @@ const char kPage[] = R"html(
 <title>Air dryer</title>
 <style>
   body { font-family: sans-serif; margin: 2rem; background: #111; color: #eee; }
+  .reading { font-size: 2.6rem; font-weight: 700; margin: 0.4rem 0 1.2rem; }
+  .reading span { color: #6cf; }
   button { font-size: 1.3rem; margin: 0.4rem; padding: 0.9rem 1.3rem; }
   #status { margin-top: 1.4rem; min-height: 1.2em; }
+  #raw { color: #888; font-family: monospace; font-size: 0.95rem; }
 </style>
 </head>
 <body>
 <h1>Air dryer</h1>
+<div class="reading">Humidity / Display: <span id="disp">--</span></div>
 <button onclick="send('on')">On</button>
 <button onclick="send('off')">Off</button>
 <button onclick="send('humidity')">Humidity</button>
 <button onclick="send('fan')">Fan</button>
 <button onclick="send('sleep')">Sleep</button>
 <button onclick="send('timer')">Timer</button>
+<div style="margin-top: 1rem;">
+  <select id="humTarget" style="font-size: 1.2rem; padding: 0.5rem;">
+    <option value="40">40%</option>
+    <option value="45">45%</option>
+    <option value="50" selected>50%</option>
+    <option value="55">55%</option>
+    <option value="60">60%</option>
+    <option value="65">65%</option>
+    <option value="70">70%</option>
+  </select>
+  <button onclick="setHumidity()">Set Humidity (%)</button>
+</div>
+<div style="margin-top: 0.6rem;">
+  <input id="hours" type="number" min="0" max="24" value="2" style="font-size: 1.2rem; width: 4rem; padding: 0.5rem;">
+  <button onclick="setTimer()">Set Timer (h)</button>
+</div>
 <p id="status"></p>
+<p id="raw"></p>
 <script>
 function send(name) {
   const status = document.getElementById('status');
   status.textContent = 'sending ' + name + '...';
   fetch('/cmd?name=' + name).then(r => r.text()).then(t => { status.textContent = t; });
 }
+function setHumidity() {
+  const p = document.getElementById('humTarget').value;
+  const status = document.getElementById('status');
+  status.textContent = 'setting humidity to ' + p + '%...';
+  fetch('/humidity?percent=' + encodeURIComponent(p)).then(r => r.text()).then(t => { status.textContent = t; });
+}
+function setTimer() {
+  const h = document.getElementById('hours').value;
+  const status = document.getElementById('status');
+  status.textContent = 'setting timer to ' + h + 'h...';
+  fetch('/timer?hours=' + encodeURIComponent(h)).then(r => r.text()).then(t => { status.textContent = t; });
+}
+function poll() {
+  fetch('/state').then(r => r.json()).then(s => {
+    document.getElementById('disp').textContent =
+      /^[0-9]+$/.test(s.display) ? s.display + '%' : s.display;
+    document.getElementById('raw').textContent = s.raw ? 'main: ' + s.raw : '';
+  }).catch(() => {});
+}
+poll();
+setInterval(poll, 1000);
 </script>
 </body>
 </html>
@@ -745,6 +1215,12 @@ function send(name) {
 
 void handleRoot() {
   web.send(200, "text/html", kPage);
+}
+
+void handleState() {
+  char body[128];
+  snprintf(body, sizeof(body), "{\"display\":\"%s\",\"raw\":\"%s\"}", panelText, mainHex);
+  web.send(200, "application/json", body);
 }
 
 void handleCmd() {
@@ -760,6 +1236,42 @@ void handleCmd() {
     }
   }
   web.send(404, "text/plain", "unknown");
+}
+
+void handleHumidity() {
+  if (!web.hasArg("percent")) {
+    web.send(400, "text/plain", "missing percent");
+    return;
+  }
+  int target = web.arg("percent").toInt();
+  int got = -1;
+  if (setHumidityPercent(target, &got)) {
+    char msg[32];
+    snprintf(msg, sizeof(msg), "humidity set to %d%%", got);
+    web.send(200, "text/plain", msg);
+  } else {
+    char msg[48];
+    snprintf(msg, sizeof(msg), "humidity failed (40..70 step 5, last=%d)", got);
+    web.send(200, "text/plain", msg);
+  }
+}
+
+void handleTimer() {
+  if (!web.hasArg("hours")) {
+    web.send(400, "text/plain", "missing hours");
+    return;
+  }
+  int target = web.arg("hours").toInt();
+  int got = -1;
+  if (setTimerHours(target, &got)) {
+    char msg[32];
+    snprintf(msg, sizeof(msg), "timer set to %02dh", got);
+    web.send(200, "text/plain", msg);
+  } else {
+    char msg[48];
+    snprintf(msg, sizeof(msg), "timer failed (last=%d)", got);
+    web.send(200, "text/plain", msg);
+  }
 }
 
 void serviceTask(void*) {
@@ -779,7 +1291,10 @@ void serviceTask(void*) {
     if (!serverStarted && wifiStarted && WiFi.status() == WL_CONNECTED) {
       telnet.begin();
       web.on("/", handleRoot);
+      web.on("/state", handleState);
       web.on("/cmd", handleCmd);
+      web.on("/humidity", handleHumidity);
+      web.on("/timer", handleTimer);
       web.begin();
       serverStarted = true;
       Serial.printf("telnet %s %u\n", WiFi.localIP().toString().c_str(), kTelnetPort);
